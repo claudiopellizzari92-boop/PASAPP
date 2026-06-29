@@ -3072,6 +3072,34 @@ function DashboardScreen({ onNavigate }) {
     else if (Notification.permission === 'default') Notification.requestPermission().then(p=>{ if(p==='granted') notify(); });
   }, [allTasks]);
 
+  // ── Notificación diaria de movimientos (check-in/out) ─────────
+  useEffect(() => {
+    if (!('Notification' in window) || !reservations.length) return;
+    if (checkinsToday.length === 0 && checkoutsToday.length === 0) return;
+
+    const hoyStr = now.toDateString();
+    // Evitar repetir el aviso el mismo día
+    if (localStorage.getItem('pas_movimientos_aviso') === hoyStr) return;
+
+    const avisar = () => {
+      const partes = [];
+      if (checkinsToday.length>0)  partes.push(`${checkinsToday.length} entrada(s)`);
+      if (checkoutsToday.length>0) partes.push(`${checkoutsToday.length} salida(s)`);
+      const unidadesIn  = checkinsToday.map(r=>uname(r.unitId)).join(', ');
+      const unidadesOut = checkoutsToday.map(r=>uname(r.unitId)).join(', ');
+      let body = `Hoy: ${partes.join(' y ')}.`;
+      if (unidadesIn)  body += `\n✈ Entran: ${unidadesIn}`;
+      if (unidadesOut) body += `\n🚪 Salen: ${unidadesOut}`;
+      new Notification('🏠 Movimientos de hoy — Porta Al Sole', {
+        body, icon: 'apple-touch-icon.png', tag: 'movimientos-dia',
+      });
+      localStorage.setItem('pas_movimientos_aviso', hoyStr);
+    };
+
+    if (Notification.permission === 'granted') avisar();
+    else if (Notification.permission === 'default') Notification.requestPermission().then(p=>{ if(p==='granted') avisar(); });
+  }, [reservations]);
+
   const greeting = () => {
     const h = now.getHours();
     if (h < 12) return 'Buenos días';
@@ -3228,13 +3256,13 @@ function DashboardScreen({ onNavigate }) {
 
             {/* Today's checkins/checkouts */}
             {(checkinsToday.length>0||checkoutsToday.length>0)&&(
-              <div style={{display:'flex',gap:8,marginBottom:10}}>
+              <div onClick={()=>onNavigate('units')} style={{display:'flex',gap:8,marginBottom:10,cursor:'pointer'}}>
                 {checkinsToday.length>0&&<div style={{flex:1,background:'rgba(45,110,78,.08)',border:'1px solid rgba(45,110,78,.2)',borderRadius:10,padding:'8px 10px'}}>
                   <div style={{fontSize:10,fontWeight:800,color:'var(--done)',marginBottom:4}}>✈ Check-in hoy ({checkinsToday.length})</div>
                   {checkinsToday.map((r,i)=><div key={i} style={{fontSize:10,color:'var(--text)'}}>{uname(r.unitId)} · {r.guest}</div>)}
                 </div>}
                 {checkoutsToday.length>0&&<div style={{flex:1,background:'rgba(184,50,50,.06)',border:'1px solid rgba(184,50,50,.15)',borderRadius:10,padding:'8px 10px'}}>
-                  <div style={{fontSize:10,fontWeight:800,color:'var(--urgent)',marginBottom:4}}>✈ Check-out hoy ({checkoutsToday.length})</div>
+                  <div style={{fontSize:10,fontWeight:800,color:'var(--urgent)',marginBottom:4}}>🚪 Check-out hoy ({checkoutsToday.length})</div>
                   {checkoutsToday.map((r,i)=><div key={i} style={{fontSize:10,color:'var(--text)'}}>{uname(r.unitId)} · {r.guest}</div>)}
                 </div>}
               </div>
