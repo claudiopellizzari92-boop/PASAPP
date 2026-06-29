@@ -490,9 +490,9 @@ function AuthProvider({ children }) {
   }, [token]);
 
   const saveCancellations = useCallback(async (res) => {
-    if (!token) return;
+    if (!token) return { ok:false, error:'No autenticado' };
     try {
-      await fetch(`${API}/cancellations`, {
+      const r = await fetch(`${API}/cancellations`, {
         method: 'POST',
         headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
         body: JSON.stringify({ cancellations: res.map(r=>({
@@ -504,13 +504,15 @@ function AuthProvider({ children }) {
           hostawayId: r.hostawayId||'',
         }))})
       });
-    } catch(e) {}
+      if (!r.ok) return { ok:false, error:`Error ${r.status} del servidor` };
+      return { ok:true };
+    } catch(e) { return { ok:false, error:'No se pudo conectar al servidor' }; }
   }, [token]);
 
   const saveReservations = useCallback(async (res) => {
-    if (!token) return;
+    if (!token) return { ok:false, error:'No autenticado' };
     try {
-      await fetch(`${API}/reservations`, {
+      const r = await fetch(`${API}/reservations`, {
         method: 'POST',
         headers: { 'Content-Type':'application/json', Authorization:`Bearer ${token}` },
         body: JSON.stringify({ reservations: res.map(r=>({
@@ -522,7 +524,9 @@ function AuthProvider({ children }) {
           hostawayId: r.hostawayId||'',
         }))})
       });
-    } catch(e) { console.log('Reservations save failed', e); }
+      if (!r.ok) return { ok:false, error:`Error ${r.status} del servidor` };
+      return { ok:true };
+    } catch(e) { return { ok:false, error:'No se pudo conectar al servidor' }; }
   }, [token]);
 
   const fetchMeasurements = useCallback(async (force=false) => {
@@ -635,6 +639,33 @@ const HOSTAWAY_MAP = {
 // Parse Hostaway CSV - confirmed reservations only
 function parseHostawayCSV(csvText) {
   return parseHostawayCSVWithStatus(csvText, 'confirmed');
+}
+
+// Parse and collect import statistics (for showing a summary to the user)
+function parseHostawayWithStats(csvText) {
+  const lines = csvText.trim().split('\n');
+  const headers = lines[0].replace(/\r/,'').split(',');
+  const stats = {
+    totalRows: 0, confirmed: 0, cancelled: 0,
+    skippedOwner: 0, skippedUnknownUnit: 0, skippedBadDate: 0,
+    unknownUnits: new Set(),
+  };
+  for (let i=1; i<lines.length; i++) {
+    const vals = lines[i].replace(/\r/,'').match(/(".*?"|[^,]+|(?<=,)(?=,)|^(?=,)|(?<=,)$)/g)||[];
+    const row = {};
+    headers.forEach((h,j) => row[h.trim()] = (vals[j]||'').replace(/^"|"$/g,'').trim());
+    if (!row.status) continue;
+    stats.totalRows++;
+    if (row.type !== 'guest') { stats.skippedOwner++; continue; }
+    const hostawayId = (row.display_id||'').split('|')[0].trim().replace(/^aw-/, '');
+    if (!HOSTAWAY_MAP[hostawayId]) { stats.skippedUnknownUnit++; stats.unknownUnits.add(hostawayId); continue; }
+    const dateParts = (row.display_dates||'').split(' - ');
+    if (dateParts.length !== 2) { stats.skippedBadDate++; continue; }
+    if (row.status === 'confirmed') stats.confirmed++;
+    else if (row.status === 'cancelled') stats.cancelled++;
+  }
+  stats.unknownUnits = [...stats.unknownUnits];
+  return stats;
 }
 
 // Parse Hostaway CSV - cancelled reservations only
@@ -3119,6 +3150,8 @@ function ReservationsScreen() {
   const [calMonth, setCalMonth] = useState(now.getMonth());
   const [incYear, setIncYear] = useState(now.getFullYear());
   const [incMonth, setIncMonth] = useState(null); // null = año completo
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null); // {stats, ok, error}
   const rentableUnits = UNIT_IDS.filter(id=>id!==100&&id!==101);
   const MONTHS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const MONTHS_FULL = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
@@ -3205,12 +3238,29 @@ function ReservationsScreen() {
             <input type="file" accept=".csv" style={{display:'none'}} onChange={e=>{
               const file=e.target.files[0]; if(!file) return;
               const rd=new FileReader();
-              rd.onload=ev=>{
+              rd.onload=async ev=>{
                 const text=ev.target.result;
-                const res=parseHostawayCSV(text);
-                const canc=parseHostawayCancellationsCSV(text);
-                setReservations(res); saveReservations(res);
-                setCancellations(canc); saveCancellations(canc);
+                setImporting(true);
+                setImportResult(null);
+                try {
+                  const stats = parseHostawayWithStats(text);
+                  const res = parseHostawayCSV(text);
+                  const canc = parseHostawayCancellationsCSV(text);
+                  // Guardar y verificar resultado
+                  const r1 = await saveReservations(res);
+                  const r2 = await saveCancellations(canc);
+                  if (r1.ok && r2.ok) {
+                    setReservations(res);
+                    setCancellations(canc);
+                    setImportResult({ ok:true, stats, imported:res.length, importedCanc:canc.length });
+                  } else {
+                    setImportResult({ ok:false, error:(r1.error||r2.error||'Error desconocido') });
+                  }
+                } catch(err) {
+                  setImportResult({ ok:false, error:'El archivo no se pudo leer. ¿Es un CSV de Hostaway?' });
+                }
+                setImporting(false);
+                e.target.value=''; // permitir resubir el mismo archivo
               };
               rd.readAsText(file);
             }}/>
@@ -3815,6 +3865,74 @@ function ReservationsScreen() {
 
         </div>
       )}
+
+      {/* ── Overlay mientras importa ── */}
+      {importing&&(
+        <div className="overlay" style={{alignItems:'center'}}>
+          <div style={{background:'var(--surface)',borderRadius:14,padding:'28px 32px',textAlign:'center',maxWidth:280}}>
+            <div className="spinner" style={{margin:'0 auto 14px'}}/>
+            <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>Importando reservas…</div>
+            <div style={{fontSize:11,color:'var(--muted)'}}>Si el servidor estaba dormido, puede tardar unos segundos.</div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Resumen de importación ── */}
+      {importResult&&(
+        <div className="overlay" onClick={e=>e.target===e.currentTarget&&setImportResult(null)} style={{alignItems:'center'}}>
+          <div style={{background:'var(--surface)',borderRadius:14,padding:'22px 20px',maxWidth:330,width:'90%'}}>
+            {importResult.ok ? (
+              <>
+                <div style={{fontSize:34,textAlign:'center',marginBottom:6}}>✅</div>
+                <div style={{fontSize:17,fontWeight:700,fontFamily:'var(--serif)',textAlign:'center',marginBottom:14}}>Importación completa</div>
+                <div style={{background:'var(--bg)',borderRadius:10,padding:'12px 14px',marginBottom:12}}>
+                  <div style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:13}}>
+                    <span style={{color:'var(--muted)'}}>Reservas activas</span>
+                    <span style={{fontWeight:700,color:'var(--done)'}}>{importResult.imported}</span>
+                  </div>
+                  <div style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:13}}>
+                    <span style={{color:'var(--muted)'}}>Cancelaciones</span>
+                    <span style={{fontWeight:700}}>{importResult.importedCanc}</span>
+                  </div>
+                  <div style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:13,borderTop:'1px solid var(--border)',marginTop:4,paddingTop:8}}>
+                    <span style={{color:'var(--muted)'}}>Bloqueos del dueño (ignorados)</span>
+                    <span style={{color:'var(--muted)'}}>{importResult.stats.skippedOwner}</span>
+                  </div>
+                  {importResult.stats.skippedUnknownUnit>0&&(
+                    <div style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:13}}>
+                      <span style={{color:'var(--urgent)'}}>Unidad desconocida</span>
+                      <span style={{color:'var(--urgent)',fontWeight:700}}>{importResult.stats.skippedUnknownUnit}</span>
+                    </div>
+                  )}
+                  {importResult.stats.skippedBadDate>0&&(
+                    <div style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:13}}>
+                      <span style={{color:'var(--urgent)'}}>Fecha inválida</span>
+                      <span style={{color:'var(--urgent)',fontWeight:700}}>{importResult.stats.skippedBadDate}</span>
+                    </div>
+                  )}
+                </div>
+                {importResult.stats.unknownUnits.length>0&&(
+                  <div style={{background:'var(--urgent-bg)',border:'1px solid var(--urgent)',borderRadius:8,padding:'8px 10px',fontSize:11,color:'var(--urgent)',marginBottom:12}}>
+                    ⚠️ Unidades no reconocidas: {importResult.stats.unknownUnits.join(', ')}. Estas reservas no se importaron.
+                  </div>
+                )}
+                <button onClick={()=>setImportResult(null)} style={{width:'100%',background:'var(--gold)',color:'#fff',border:'none',borderRadius:9,padding:'11px',fontWeight:700,fontSize:14,cursor:'pointer'}}>
+                  Listo
+                </button>
+              </>
+            ) : (
+              <>
+                <div style={{fontSize:34,textAlign:'center',marginBottom:6}}>❌</div>
+                <div style={{fontSize:17,fontWeight:700,fontFamily:'var(--serif)',textAlign:'center',marginBottom:8}}>No se pudo importar</div>
+                <div style={{fontSize:13,color:'var(--muted)',textAlign:'center',marginBottom:16}}>{importResult.error}</div>
+                <button onClick={()=>setImportResult(null)} style={{width:'100%',background:'var(--surface)',color:'var(--text)',border:'1px solid var(--border)',borderRadius:9,padding:'11px',fontWeight:700,fontSize:14,cursor:'pointer'}}>
+                  Cerrar
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -3895,3 +4013,5 @@ if ('serviceWorker' in navigator) {
 </script>
 </body>
 </html>
+
+
