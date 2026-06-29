@@ -2660,7 +2660,6 @@ function RecordsScreen() {
         )}
       </div>
 
-      {viewMode==='week'&&<button className="fab" onClick={()=>setShowAdd(true)}><Ic d={D.plus} sz={16}/> Nuevo registro</button>}
       {/* Add modal */}
       {showAdd&&(
         <div className="overlay" onClick={e=>e.target===e.currentTarget&&setShowAdd(false)}>
