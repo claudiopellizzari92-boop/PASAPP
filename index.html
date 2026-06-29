@@ -2094,6 +2094,87 @@ function UnitsScreen() {
   );
 }
 
+/* MEASUREMENT DETAIL MODAL */
+function MeasDetailModal({ meas, type, unit2, measurements, uname, authFetch, onClose, onUpdated }) {
+  const [editVal, setEditVal] = useState(String(meas.value));
+  const [busy, setBusy] = useState(false);
+
+  const histAll = measurements
+    .filter(m=>m.unitId===meas.unitId && m.type===type)
+    .sort((a,b)=>a.week.localeCompare(b.week));
+  const hist = histAll.map((m,idx)=>{
+    const prev = idx>0 ? histAll[idx-1] : null;
+    const cons = prev ? m.value - prev.value : null;
+    return { ...m, cons };
+  }).reverse();
+
+  const guardar = async () => {
+    const v = parseFloat(editVal);
+    if (isNaN(v)) return;
+    setBusy(true);
+    const r = await authFetch(`/measurements/${meas.id}`,{method:'PATCH',body:JSON.stringify({value:v})});
+    if (r.ok) onUpdated();
+    setBusy(false);
+  };
+
+  const borrar = async () => {
+    if (!confirm(`¿Borrar la medición de ${uname(meas.unitId)} (${meas.value} ${unit2})?`)) return;
+    setBusy(true);
+    const r = await authFetch(`/measurements/${meas.id}`,{method:'DELETE'});
+    if (r.ok || r.status===204) onUpdated();
+    setBusy(false);
+  };
+
+  return (
+    <div className="overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{maxWidth:380}}>
+        <div className="mhandle"/>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
+          <div className="mtitle" style={{marginBottom:0}}>{uname(meas.unitId)}</div>
+          <span style={{fontSize:11,color:'var(--muted)',background:'var(--bg)',borderRadius:6,padding:'3px 8px'}}>{type==='agua'?'💧 Agua':'⚡ Luz'}</span>
+        </div>
+        <div style={{fontSize:11,color:'var(--muted)',marginBottom:14}}>Semana {meas.week?.split('-W')[1]} · {meas.week?.split('-W')[0]}</div>
+
+        <div style={{marginBottom:8}}>
+          <div style={{fontSize:11,fontWeight:600,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.5,marginBottom:5}}>Lectura ({unit2})</div>
+          <input className="minp" type="number" inputMode="decimal" value={editVal} onChange={e=>setEditVal(e.target.value)} style={{fontSize:18,fontWeight:700}}/>
+        </div>
+
+        <div style={{display:'flex',gap:8,marginBottom:18}}>
+          <button onClick={borrar} disabled={busy} style={{flex:1,background:'var(--urgent-bg)',color:'var(--urgent)',border:'1px solid var(--urgent)',borderRadius:9,padding:'11px',fontWeight:700,fontSize:13,cursor:'pointer'}}>
+            Borrar
+          </button>
+          <button onClick={guardar} disabled={busy||editVal===String(meas.value)} style={{flex:2,background:editVal!==String(meas.value)?'var(--gold)':'var(--border)',color:'#fff',border:'none',borderRadius:9,padding:'11px',fontWeight:700,fontSize:14,cursor:'pointer'}}>
+            {busy?'Guardando...':'Guardar cambios'}
+          </button>
+        </div>
+
+        <div style={{fontSize:11,fontWeight:700,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.6,marginBottom:8}}>Historial de {uname(meas.unitId)}</div>
+        <div style={{maxHeight:240,overflowY:'auto',background:'var(--bg)',borderRadius:10,padding:'4px 0'}}>
+          {hist.length===0?(
+            <div style={{fontSize:12,color:'var(--muted)',textAlign:'center',padding:'16px'}}>Sin historial</div>
+          ):hist.map((h,k)=>(
+            <div key={h.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 14px',borderBottom:k<hist.length-1?'1px solid var(--border)':'none',background:h.id===meas.id?'rgba(201,150,58,.08)':'transparent'}}>
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:'var(--text)'}}>Sem. {h.week?.split('-W')[1]}</div>
+                <div style={{fontSize:10,color:'var(--muted)'}}>{h.week?.split('-W')[0]}</div>
+              </div>
+              <div style={{textAlign:'right'}}>
+                <div style={{fontSize:13,fontWeight:700,color:'var(--text)'}}>{h.value} <span style={{fontSize:9,fontWeight:400,color:'var(--muted)'}}>{unit2}</span></div>
+                {h.cons!=null&&(
+                  <div style={{fontSize:10,fontWeight:700,color:h.cons<0?'var(--urgent)':h.cons>0?'var(--done)':'var(--muted)'}}>
+                    {h.cons>=0?'+':''}{h.cons.toFixed(1)} {unit2}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* RECORDS SCREEN */
 function RecordsScreen() {
   const { user, authFetch, measurements:globalM, measFetching, fetchMeasurements, reloadMeasurements, setMeasurements } = useAuth();
@@ -2114,6 +2195,7 @@ function RecordsScreen() {
   const [scanDone,  setScanDone]  = useState(false);
   const [scanResults, setScanResults] = useState([]);
   const [showCompare, setShowCompare] = useState(false);
+  const [selMeas, setSelMeas] = useState(null); // medición seleccionada para ver/editar
   const scanUnits = UNIT_IDS.filter(id=>id!==100&&id!==101);
 
   // ── ISO week helpers ──────────────────────────────────────────
@@ -2562,7 +2644,7 @@ function RecordsScreen() {
                 {rows.map((row,i)=>{
                   const isUp = row.alert?.direction==='up';
                   return (
-                    <div key={i} className="rrec">
+                    <div key={i} className="rrec" onClick={()=>setSelMeas(row)} style={{cursor:'pointer'}}>
                       <div className="rrec-row">
                         <div className="rrec-name">{row.label}</div>
                         <div className="rrec-consumo">
@@ -2659,6 +2741,18 @@ function RecordsScreen() {
           )
         )}
       </div>
+
+      {/* ── Modal detalle de medición ── */}
+      {selMeas&&<MeasDetailModal
+        meas={selMeas}
+        type={type}
+        unit2={unit2}
+        measurements={measurements}
+        uname={uname}
+        authFetch={authFetch}
+        onClose={()=>setSelMeas(null)}
+        onUpdated={async()=>{ const allM=await authFetch('/measurements').then(r=>r.ok?r.json():null); if(allM)setM(allM); setSelMeas(null); }}
+      />}
 
       {/* Add modal */}
       {showAdd&&(
