@@ -3677,10 +3677,32 @@ function ReservationsScreen() {
                   </div>
                   {(()=>{
                     const totalNights = filtered.reduce((s,r)=>s+Math.max(0,Math.round((r.checkOut-r.checkIn)/(1000*60*60*24))),0);
+
+                    // Ocupación del mes seleccionado
+                    let mejorMesKpi;
+                    if (incMonth===null) {
+                      mejorMesKpi = {l:'Mejor mes', v:(()=>{const best=monthlyIncome.reduce((a,b)=>b.total>a.total?b:a,monthlyIncome[0]);return best&&best.total>0?MONTHS[best.month]:'—';})(), c:'var(--done)'};
+                    } else {
+                      // Calcular % de ocupación del mes
+                      const mStart = new Date(incYear, incMonth, 1);
+                      const mEnd   = new Date(incYear, incMonth+1, 0);
+                      const daysInMonth = mEnd.getDate();
+                      let occDays = 0;
+                      rentableUnits.forEach(uid=>{
+                        reservations.filter(r=>r.unitId===uid).forEach(r=>{
+                          const s = r.checkIn < mStart ? mStart : r.checkIn;
+                          const e = r.checkOut > mEnd ? mEnd : r.checkOut;
+                          if (s < e) occDays += (e-s)/(1000*60*60*24);
+                        });
+                      });
+                      const occRate = Math.round(occDays / (rentableUnits.length * daysInMonth) * 100);
+                      mejorMesKpi = {l:'Ocupación', v:occRate+'%', c:'var(--done)'};
+                    }
+
                     return [
                       {l:'Promedio/reserva', v:filtered.length>0?fmtMoney(Math.round(totalIncome/filtered.length)):'—', c:'var(--gold2)'},
                       {l:'Promedio/noche',   v:totalNights>0?fmtMoney(Math.round(totalIncome/totalNights)):'—',         c:'var(--gold2)'},
-                      {l:'Mejor mes', v:incMonth===null?(()=>{const best=monthlyIncome.reduce((a,b)=>b.total>a.total?b:a,monthlyIncome[0]);return best&&best.total>0?MONTHS[best.month]:'—';})():'—', c:'var(--done)'},
+                      mejorMesKpi,
                     ];
                   })().map((k,i)=>(
                     <div key={i} style={{background:'var(--surface)',border:'1px solid var(--border)',borderRadius:12,padding:'12px 14px'}}>
