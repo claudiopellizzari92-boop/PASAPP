@@ -3446,13 +3446,34 @@ function ReservationsScreen() {
                   const stats = parseHostawayWithStats(text);
                   const res = parseHostawayCSV(text);
                   const canc = parseHostawayCancellationsCSV(text);
+
+                  // Calcular ingresos del año actual del CSV nuevo (snapshot)
+                  const calcYearIncome = (rlist, yr) => rlist
+                    .filter(r=>r.checkOut.getFullYear()===yr)
+                    .reduce((s,r)=>s+parseIncome(r.income),0);
+                  const thisYr = new Date().getFullYear();
+                  const newTotal = calcYearIncome(res, thisYr);
+
+                  // Leer snapshot anterior (si existe)
+                  let snapshotDiff = null;
+                  try {
+                    const prev = JSON.parse(localStorage.getItem('pas_income_snapshot'));
+                    if (prev && prev.year===thisYr && typeof prev.total==='number') {
+                      snapshotDiff = { prevTotal: prev.total, diff: newTotal - prev.total, date: prev.date };
+                    }
+                  } catch(e) {}
+
                   // Guardar y verificar resultado
                   const r1 = await saveReservations(res);
                   const r2 = await saveCancellations(canc);
                   if (r1.ok && r2.ok) {
                     setReservations(res);
                     setCancellations(canc);
-                    setImportResult({ ok:true, stats, imported:res.length, importedCanc:canc.length });
+                    // Guardar nuevo snapshot
+                    localStorage.setItem('pas_income_snapshot', JSON.stringify({
+                      year: thisYr, total: newTotal, date: new Date().toLocaleDateString('es-VE')
+                    }));
+                    setImportResult({ ok:true, stats, imported:res.length, importedCanc:canc.length, snapshotDiff, newTotal });
                   } else {
                     setImportResult({ ok:false, error:(r1.error||r2.error||'Error desconocido') });
                   }
@@ -3706,6 +3727,26 @@ function ReservationsScreen() {
                       <div style={{fontSize:12,fontWeight:800,color:'var(--gold)'}}>{MONTHS_FULL[incMonth]} {incYear}</div>
                       <button onClick={()=>setIncMonth(null)} style={{fontSize:10,color:'var(--muted)',background:'var(--border)',border:'none',borderRadius:6,padding:'3px 9px',cursor:'pointer',fontWeight:700}}>Ver año ↩</button>
                     </div>
+                    {/* Comparación vs mismo mes año anterior */}
+                    {(()=>{
+                      const prevMonthTotal = reservations.filter(r=>r.checkOut.getFullYear()===incYear-1&&r.checkOut.getMonth()===incMonth)
+                        .reduce((s,r)=>s+parseIncome(r.income),0);
+                      if (prevMonthTotal<=0) return null;
+                      const diff = totalIncome - prevMonthTotal;
+                      const pct = Math.round(diff/prevMonthTotal*100);
+                      const up = diff>=0;
+                      return (
+                        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10,padding:'8px 10px',background:up?'rgba(45,110,78,.08)':'rgba(184,50,50,.06)',borderRadius:9,border:`1px solid ${up?'rgba(45,110,78,.2)':'rgba(184,50,50,.15)'}`}}>
+                          <span style={{fontSize:18}}>{up?'📈':'📉'}</span>
+                          <div style={{flex:1}}>
+                            <div style={{fontSize:12,fontWeight:800,color:up?'var(--done)':'var(--urgent)'}}>
+                              {up?'+':''}{fmtMoney(diff)} <span style={{fontSize:11}}>({up?'+':''}{pct}%)</span>
+                            </div>
+                            <div style={{fontSize:10,color:'var(--muted)'}}>vs {MONTHS[incMonth]} {incYear-1} ({fmtMoney(prevMonthTotal)})</div>
+                          </div>
+                        </div>
+                      );
+                    })()}
                     {filtered.length===0
                       ? <div style={{fontSize:11,color:'var(--muted)'}}>Sin ingresos este mes</div>
                       : filtered.sort((a,b)=>a.checkIn-b.checkIn).map((r,i)=>(
@@ -4085,6 +4126,26 @@ function ReservationsScreen() {
               <>
                 <div style={{fontSize:34,textAlign:'center',marginBottom:6}}>✅</div>
                 <div style={{fontSize:17,fontWeight:700,fontFamily:'var(--serif)',textAlign:'center',marginBottom:14}}>Importación completa</div>
+
+                {/* Comparación de ingresos vs última carga */}
+                {importResult.snapshotDiff ? (
+                  <div style={{background:importResult.snapshotDiff.diff>=0?'rgba(45,110,78,.1)':'rgba(184,50,50,.08)',border:`1px solid ${importResult.snapshotDiff.diff>=0?'rgba(45,110,78,.25)':'rgba(184,50,50,.2)'}`,borderRadius:10,padding:'12px 14px',marginBottom:12,textAlign:'center'}}>
+                    <div style={{fontSize:10,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.5,fontWeight:700,marginBottom:4}}>Ingresos {new Date().getFullYear()} vs última carga</div>
+                    <div style={{fontSize:22,fontWeight:800,fontFamily:'var(--serif)',color:importResult.snapshotDiff.diff>=0?'var(--done)':'var(--urgent)',lineHeight:1.1}}>
+                      {importResult.snapshotDiff.diff>=0?'▲ +':'▼ '}{fmtMoney(Math.abs(importResult.snapshotDiff.diff))}
+                    </div>
+                    <div style={{fontSize:10,color:'var(--muted)',marginTop:4}}>
+                      Antes: {fmtMoney(importResult.snapshotDiff.prevTotal)} · Ahora: {fmtMoney(importResult.newTotal)}
+                    </div>
+                    <div style={{fontSize:9,color:'var(--muted)',marginTop:2,fontStyle:'italic'}}>Última carga: {importResult.snapshotDiff.date}</div>
+                  </div>
+                ) : importResult.newTotal>0 ? (
+                  <div style={{background:'rgba(201,150,58,.08)',border:'1px solid rgba(201,150,58,.2)',borderRadius:10,padding:'10px 14px',marginBottom:12,textAlign:'center'}}>
+                    <div style={{fontSize:11,color:'var(--muted)'}}>Ingresos {new Date().getFullYear()}: <strong style={{color:'var(--gold)'}}>{fmtMoney(importResult.newTotal)}</strong></div>
+                    <div style={{fontSize:9,color:'var(--muted)',marginTop:3,fontStyle:'italic'}}>Guardado como referencia. La próxima carga mostrará el cambio.</div>
+                  </div>
+                ) : null}
+
                 <div style={{background:'var(--bg)',borderRadius:10,padding:'12px 14px',marginBottom:12}}>
                   <div style={{display:'flex',justifyContent:'space-between',padding:'4px 0',fontSize:13}}>
                     <span style={{color:'var(--muted)'}}>Reservas activas</span>
